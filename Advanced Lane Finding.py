@@ -58,19 +58,19 @@ def binary_image(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
        
     combined = np.zeros_like(sxbinary)
     combined[(sxbinary == 1) | (s_binary==1)] = 1
-    
+    #plt.imshow(color_binary)
     return combined
 
 def warp_image(img):
 
     img_size = (img.shape[1], img.shape[0])
 
-    src = np.float32([[585,450],[695,450],[100,img_size[1]],[1180,img_size[1]]])
-    dst = np.float32([[200,0],[img_size[0]-200,0],[200,img_size[1]],[img_size[0]-200,img_size[1]-100]])
+    src = np.float32([[590,450],[690,450],[180,img_size[1]],[1110,img_size[1]]])
+    dst = np.float32([[250,0],[img_size[0]-250,0],[250,img_size[1]],[img_size[0]-250,img_size[1]]])
     M = cv2.getPerspectiveTransform(src, dst)
     Minv = cv2.getPerspectiveTransform(dst, src)
     warped = cv2.warpPerspective(img, M, img_size, flags=cv2.INTER_LINEAR)
-        
+    #print_img(img, warped)    
     return warped, M, Minv
 
 def histogram(img):
@@ -80,6 +80,7 @@ def histogram(img):
     
     #Sum across image pixel vertically
     histogram = np.sum(bottom_half, axis=0)
+    #plt.plot(histogram)
     
     return histogram
 
@@ -178,7 +179,6 @@ def fit_polynomial(binary_warped, lfx_pos, lfy_pos, rgx_pos, rgy_pos):
     plt.imshow(out_img)
     ## End visualization steps ##
     '''
-    
     return left_fit, right_fit, ploty
 
 def search_around_poly(binary_warped, left_fit, right_fit):
@@ -244,7 +244,7 @@ def search_around_poly(binary_warped, left_fit, right_fit):
     plt.plot(left_fitx, ploty, color='yellow')
     plt.plot(right_fitx, ploty, color='yellow')
     ## End visualization steps ##
-    '''
+   '''
     return leftx, lefty, rightx, righty, left_fit, right_fit, ploty
 
 def measure_curvature_pixels(left_fit, right_fit, ploty):
@@ -278,7 +278,7 @@ def measure_curvature_real(lfx_pos, lfy_pos, rgx_pos, rgy_pos, ploty):
     # We'll choose the maximum y-value, corresponding to the bottom of the image
     y_eval = np.max(ploty)
     
-    ##### TO-DO: Implement the calculation of R_curve (radius of curvature) #####
+    ##### radius of curvature 
     left_curverad = ((1+(2*left_fit_cr[0]*y_eval*ym_per_pix+left_fit_cr[1])**2)**(3/2))/(np.absolute(2*left_fit_cr[0]))
     right_curverad = ((1+(2*right_fit_cr[0]*y_eval*ym_per_pix+right_fit_cr[1])**2)**(3/2))/(np.absolute(2*right_fit_cr[0]))
     
@@ -304,23 +304,66 @@ def car_offset(binary_warped, left_fit, right_fit, ploty):
     
     return offset_mts
 
+def sanity_checks(lfx_pos, lfy_pos, rgx_pos, rgy_pos, left_fit, right_fit, ploty, xm_per_pix, ym_per_pix):
+    #Compute fits in both lines with calculated left and right fits
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+        
+    #Sanity check of lane width
+    #Compute the lane width
+    lane_width = np.absolute((left_fitx - right_fitx)*xm_per_pix)  
+    avg_lane = np.mean(lane_width)
+    
+    #Compute the curvature of the road in meters
+    lf_curv_mts, rg_curv_mts = measure_curvature_real(lfx_pos, lfy_pos,
+                               rgx_pos, rgy_pos, ploty)
+    
+    #Calculate direction of the curve   
+    sll = left_fitx[719] - left_fitx[0] 
+    slr = right_fitx[719] - right_fitx[0]
+    
+    if avg_lane > 3.5 and avg_lane < 4.0 and ((sll > 0 and slr > 0) or (sll < 0 and slr < 0)):
+        detection = True
+    else:
+        detection = False
+
+    
+    return detection, lf_curv_mts, rg_curv_mts, avg_lane
+
 def process_image(image):
 
+    # Define conversions in x and y from pixels space to meters
+    ym_per_pix = 30/720 # meters per pixel in y dimension
+    xm_per_pix = 3.7/700 # meters per pixel in x dimension
+    
     #undistort image with the parameters obtained with the calibration
     dst = cv2.undistort(image, mtx, dist, None, mtx) #distorted image
     #Get combined binary image with color and Gradient thresholds
-    binary_img = binary_image(dst, (170,255), (20,100))
+    binary_img = binary_image(dst, (170,230),(20,100))
     #Warp image to get an eye-birds image
     warped, M, Minv = warp_image(binary_img)
     
-    if left_line.detected == False | right_line.detected == False:
+       
+    if left_line.detected == True and right_line.detected == True:
+        ## Search from Prior ## 
+        #When we get the first curves with an image of the video, the next frame
+        #we can search just between a margin without implementing sliding windows
+        lfx_pos, lfy_pos, rgx_pos, rgy_pos, left_fit, right_fit, ploty = search_around_poly(warped, 
+                                                                         left_line.current_fit, right_line.current_fit)
+        
+        good_detection, lf_curv_mts, rg_curv_mts, avg_lane = sanity_checks(lfx_pos, lfy_pos, rgx_pos, rgy_pos, 
+                                                     left_fit, right_fit, ploty, xm_per_pix, ym_per_pix)
+        left_line.detected = good_detection
+        right_line.detected = good_detection
+        
+    if left_line.detected == False  or right_line.detected == False:
         ## Histogram Peaks and Sliding Windows Method ##
         #Get the histogram of the bottom half of the image.
         hist = histogram(warped)
         #Get the peaks of the histograms and get the starting points of the lane lines.
         lfx_base, rgx_base = get_peaks(hist)
         #Set HYPERPARAMETERS
-        nwindows = 10 #number of sliding windows in the image
+        nwindows = 9 #number of sliding windows in the image
         margin = 100 #Width of the windows +/- margin
         minpix = 50 #Min number of pixels to recenter window
         #Call a function that performs the detection of the pixels of both lane lines
@@ -328,49 +371,46 @@ def process_image(image):
         #Compute a 2nd order polynomial to get the curvature of the lane
         left_fit, right_fit, ploty = fit_polynomial(warped, lfx_pos, lfy_pos, rgx_pos, rgy_pos)
         ## End of the Sliding windows method ##
+
+        good_detection, lf_curv_mts, rg_curv_mts, avg_lane = sanity_checks(lfx_pos, lfy_pos, rgx_pos, rgy_pos,
+                                                     left_fit, right_fit, ploty, xm_per_pix, ym_per_pix)
         
-        left_line.detected = True
-        right_line.detected = True
+        left_line.detected = good_detection
+        right_line.detected = good_detection
     
+    #Compute fits in both lines with calculated left and right fits
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+    
+    if left_line.detected == True or left_line.radius_of_curvature == None:
+        # Saving X and Y values
+        left_line.allx = lfx_pos
+        left_line.ally = lfy_pos
+        right_line.allx = rgx_pos
+        right_line.ally = rgy_pos 
+        #Saving Left and Right Fit
+        left_line.current_fit = left_fit
+        right_line.current_fit = right_fit
+        #Save Curvatures
+        left_line.radius_of_curvature = lf_curv_mts
+        right_line.radius_of_curvature = rg_curv_mts
+        #Save Fit
+        left_line.recent_xfitted = left_fitx
+        right_line.recent_xfitted = right_fitx
+        
     else:
-        ## Search from Prior ## 
-        #When we get the first curves with an image of the video, the next frame
-        #we can search just between a margin without implementing sliding windows
-        lfx_pos, lfy_pos, rgx_pos, rgy_pos, left_fit, right_fit, ploty = search_around_poly(warped, 
-                                                                         left_line.current_fit, right_line.current_fit)
-    
-    
-    # Saving X and Y values
-    left_line.allx = lfx_pos
-    left_line.ally = lfy_pos
-    right_line.allx = rgx_pos
-    right_line.ally = rgy_pos
-    
-    #Saving Left and Right Fit
-    left_line.current_fit = left_fit
-    right_line.current_fit = right_fit
-    
-    #x fitted
-    left_line.recent_xfitted = left_line.current_fit[0]*ploty**2 + left_line.current_fit[1]*ploty + left_line.current_fit[2]
-    right_line.recent_xfitted = right_line.current_fit[0]*ploty**2 + right_line.current_fit[1]*ploty + right_line.current_fit[2]
-    
-    
-    '''
-    #Compute the curvature of the road in pixels
-    lf_curv_px, rg_curv_px = measure_curvature_pixels(left_line.current_fit, 
-                             right_line.current_fit, ploty)
-    '''
-    
-    #Compute the curvature of the road in meters
-    lf_curv_mts, rg_curv_mts = measure_curvature_real(left_line.allx, left_line.ally,
-                               right_line.allx, right_line.ally, ploty)
-    
-    #Save Curvatures
-    left_line.radius_of_curvature = lf_curv_mts
-    right_line.radius_of_curvature = rg_curv_mts
-    
+        #Saving Left and Right Fit
+        left_line.current_fit = (left_line.current_fit + left_fit)/2
+        right_line.current_fit = (right_line.current_fit + right_fit)/2
+        #Save Curvatures
+        left_line.radius_of_curvature = (left_line.radius_of_curvature+lf_curv_mts)/2
+        right_line.radius_of_curvature = (right_line.radius_of_curvature+rg_curv_mts)/2
+        #Save Fit
+        left_line.recent_xfitted = (left_line.recent_xfitted+left_fitx)/2
+        right_line.recent_xfitted = (right_line.recent_xfitted+right_fitx)/2
+
     #compute the average of the both lines to obtain the curvature of the lane
-    curv_avg = (left_line.radius_of_curvature + right_line.radius_of_curvature)/2
+    curv_avg = (left_line.radius_of_curvature + right_line.radius_of_curvature)/2     
     
     #Compute the offset of the car from the center of the lane
     offset = car_offset(warped, left_line.current_fit, right_line.current_fit, ploty)
@@ -406,7 +446,8 @@ def process_image(image):
     #Write the Offset of the Car from the center of the lane
     cv2.putText(result, 'Vehicle is ' + str(offset) + 'm ' + side + ' of center', (35,150),
                cv2.FONT_HERSHEY_SIMPLEX, 2, (0,0,0), 2)
-    plt.imshow(result)
+    
+
     ## END OF DRAWING ##   
 
     return result    
@@ -424,9 +465,38 @@ right_line = line.Line()
 
 
 '''
-#Read an image to convert on a Thresholded Binary Image and Warp
-image = mpimg.imread('test_images/test2.jpg')
-process_image(image)
+test_images = glob.glob('test_images/test*.jpg')
+for image in test_images:
+    img = mpimg.imread(image)
+    test = binary_image(img, (150,230),(30,100))
+    warped, M, Minv = warp_image(test)
+    hist = histogram(warped)
+    left_base, right_base = get_peaks(hist)
+    leftx, lefty, rightx, righty = find_lane_pixels(warped, left_base, right_base)
+    left_fit, right_fit, ploty = fit_polynomial(warped, leftx, lefty, rightx, righty)
+    ## Visualizaion Steps ##
+    # Create an output image to draw on and visualize the result
+    out_img = np.dstack((warped, warped, warped))*255
+    #set Colors in the left and right lane regions
+    out_img[lefty,leftx] = [255,0,0]
+    out_img[righty,rightx] = [0,0,255]
+    
+    #Generate x values with the 2nd order polynomial
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
+    # Plot the polynomial lines onto the image
+    plt.plot(left_fitx, ploty, color='yellow')
+    plt.plot(right_fitx, ploty, color='yellow')
+    plt.imshow(out_img)
+    plt.show()
+    ## End visualization steps ##
+'''
+
+'''
+image = mpimg.imread('test_images/test8.jpg')
+result = process_image(image)
+plt.imshow(result)
+
 '''
 
 #Function taken from the First Project
@@ -435,7 +505,7 @@ white_output = 'project_video_output.mp4'
 ## To do so add .subclip(start_second,end_second) to the end of the line below
 ## Where start_second and end_second are integer values representing the start and end of the subclip
 ## You may also uncomment the following line for a subclip of the first 5 seconds
-#clip1 = VideoFileClip("project_video.mp4").subclip(40,45)
+#clip1 = VideoFileClip("project_video.mp4").subclip(36,48)
 clip1 = VideoFileClip("project_video.mp4")
 white_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
 %time white_clip.write_videofile(white_output, audio=False)
