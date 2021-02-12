@@ -33,15 +33,18 @@ def print_img(o_image, f_image):
 
 
 # Function to create a thresholded binary image
-def binary_image(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
+def binary_image(img, s_thresh=(230, 255), sx_thresh=(10, 120)):
     img = np.copy(img)
+    
+    r_channel = img[:,:,0]
     # Convert to HLS color space and separate the V channel
-    hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-    l_channel = hls[:,:,1]
-    s_channel = hls[:,:,2]
+    hvs = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    h_channel = hvs[:,:,0]
+    s_channel = hvs[:,:,1]
+    v_channel = hvs[:,:,2]
     
     # Sobel x
-    sobelx = cv2.Sobel(l_channel, cv2.CV_64F, 1, 0) # Take the derivative in x
+    sobelx = cv2.Sobel(v_channel, cv2.CV_64F, 1, 0) # Take the derivative in x
     abs_sobelx = np.absolute(sobelx) # Absolute x derivative to accentuate lines away from horizontal
     scaled_sobel = np.uint8(255*abs_sobelx/np.max(abs_sobelx))
     
@@ -50,15 +53,14 @@ def binary_image(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
     sxbinary[(scaled_sobel >= sx_thresh[0]) & (scaled_sobel <= sx_thresh[1])] = 1
     
     # Threshold color channel
-    s_binary = np.zeros_like(s_channel)
-    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
-    
+    s_binary = np.zeros_like(r_channel)
+    s_binary[(r_channel >= s_thresh[0]) & (r_channel <= s_thresh[1])] = 1
     # Stack each channel
-    color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary)) * 255
-       
+    color_binary = np.dstack(( np.zeros_like(sxbinary), sxbinary, s_binary))
+    
     combined = np.zeros_like(sxbinary)
     combined[(sxbinary == 1) | (s_binary==1)] = 1
-    #plt.imshow(color_binary)
+    
     return combined
 
 def warp_image(img):
@@ -184,7 +186,7 @@ def fit_polynomial(binary_warped, lfx_pos, lfy_pos, rgx_pos, rgy_pos):
 def search_around_poly(binary_warped, left_fit, right_fit):
     # HYPERPARAMETER
     # Choose the width of the margin around the previous polynomial to search
-    margin = 100
+    margin = 80
 
     # Grab activated pixels
     nonzero = binary_warped.nonzero()
@@ -311,18 +313,11 @@ def sanity_checks(lfx_pos, lfy_pos, rgx_pos, rgy_pos, left_fit, right_fit, ploty
         
     #Sanity check of lane width
     #Compute the lane width
-    lane_width = np.absolute((left_fitx - right_fitx)*xm_per_pix)  
+    lane_width = np.absolute((left_fitx - right_fitx)*xm_per_pix) 
     avg_lane = np.mean(lane_width)
     
-    #Compute the curvature of the road in meters
-    lf_curv_mts, rg_curv_mts = measure_curvature_real(lfx_pos, lfy_pos,
-                               rgx_pos, rgy_pos, ploty)
     
-    #Calculate direction of the curve   
-    sll = left_fitx[719] - left_fitx[0] 
-    slr = right_fitx[719] - right_fitx[0]
-    
-    if avg_lane > 3.5 and avg_lane < 4.0 and ((sll > 0 and slr > 0) or (sll < 0 and slr < 0)):
+    if avg_lane > 3.2 and avg_lane < 4.3:
         detection = True
     else:
         detection = False
@@ -339,7 +334,7 @@ def process_image(image):
     #undistort image with the parameters obtained with the calibration
     dst = cv2.undistort(image, mtx, dist, None, mtx) #distorted image
     #Get combined binary image with color and Gradient thresholds
-    binary_img = binary_image(dst, (170,230),(20,100))
+    binary_img = binary_image(dst, (220,255),(20,120))
     #Warp image to get an eye-birds image
     warped, M, Minv = warp_image(binary_img)
     
@@ -397,8 +392,9 @@ def process_image(image):
         #Save Fit
         left_line.recent_xfitted = left_fitx
         right_line.recent_xfitted = right_fitx
-        
+       
     else:
+        
         #Saving Left and Right Fit
         left_line.current_fit = (left_line.current_fit + left_fit)/2
         right_line.current_fit = (right_line.current_fit + right_fit)/2
@@ -408,9 +404,10 @@ def process_image(image):
         #Save Fit
         left_line.recent_xfitted = (left_line.recent_xfitted+left_fitx)/2
         right_line.recent_xfitted = (right_line.recent_xfitted+right_fitx)/2
-
+    
     #compute the average of the both lines to obtain the curvature of the lane
     curv_avg = (left_line.radius_of_curvature + right_line.radius_of_curvature)/2     
+    
     
     #Compute the offset of the car from the center of the lane
     offset = car_offset(warped, left_line.current_fit, right_line.current_fit, ploty)
@@ -463,17 +460,41 @@ dist = np.array([[-0.23185386, -0.11832054, -0.00116561,  0.00023902,  0.1535615
 left_line = line.Line()
 right_line = line.Line()
 
+#Function taken from the First Project
+white_output = 'project_video_output.mp4'
+## To speed up the testing process you may want to try your pipeline on a shorter subclip of the video
+## To do so add .subclip(start_second,end_second) to the end of the line below
+## Where start_second and end_second are integer values representing the start and end of the subclip
+## You may also uncomment the following line for a subclip of the first 5 seconds
+#clip1 = VideoFileClip("project_video.mp4").subclip(38,48)
+clip1 = VideoFileClip("project_video.mp4")
+white_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
+%time white_clip.write_videofile(white_output, audio=False)
 
+
+
+## Debug code (Ignore)
 '''
-test_images = glob.glob('test_images/test*.jpg')
+i = 1
+test_images = glob.glob('test_images/prob*.jpg')
 for image in test_images:
     img = mpimg.imread(image)
-    test = binary_image(img, (150,230),(30,100))
+    test = binary_image(img, (220,255),(20,120))
     warped, M, Minv = warp_image(test)
-    hist = histogram(warped)
-    left_base, right_base = get_peaks(hist)
-    leftx, lefty, rightx, righty = find_lane_pixels(warped, left_base, right_base)
-    left_fit, right_fit, ploty = fit_polynomial(warped, leftx, lefty, rightx, righty)
+    
+    
+    if i == 1:
+        hist = histogram(warped)
+        left_base, right_base = get_peaks(hist)
+        leftx, lefty, rightx, righty = find_lane_pixels(warped, left_base, right_base)
+        left_fit, right_fit, ploty = fit_polynomial(warped, leftx, lefty, rightx, righty)
+
+    
+    else:
+         leftx, lefty, rightx, righty, left_fit, right_fit, ploty = search_around_poly(warped, 
+                                                                         left_fit, right_fit)
+            
+    i = 2
     ## Visualizaion Steps ##
     # Create an output image to draw on and visualize the result
     out_img = np.dstack((warped, warped, warped))*255
@@ -481,17 +502,43 @@ for image in test_images:
     out_img[lefty,leftx] = [255,0,0]
     out_img[righty,rightx] = [0,0,255]
     
+    #Compute the curvature of the road in meters
+    lf_curv_mts, rg_curv_mts = measure_curvature_real(leftx, lefty,
+                               rightx, righty, ploty)
+    curv_avg = (lf_curv_mts + rg_curv_mts)/2
+    print(lf_curv_mts, rg_curv_mts, curv_avg)
+    
     #Generate x values with the 2nd order polynomial
     left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
     right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
     # Plot the polynomial lines onto the image
     plt.plot(left_fitx, ploty, color='yellow')
     plt.plot(right_fitx, ploty, color='yellow')
-    plt.imshow(out_img)
+    
+
+    
+    ## DRAWING ##
+    # Create an image to draw the lines on
+    warp_zero = np.zeros_like(warped).astype(np.uint8)
+    color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+    
+    # Recast the x and y points into usable format for cv2.fillPoly()
+    pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+    pts = np.hstack((pts_left, pts_right))
+    
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(color_warp, np.int_([pts]), (0,255, 0))
+    
+    # Warp the blank back to original image space using inverse perspective matrix (Minv)
+    newwarp = cv2.warpPerspective(color_warp, Minv, (img.shape[1], img.shape[0])) 
+    # Combine the result with the original image
+    result = cv2.addWeighted(img, 1, newwarp, 0.3, 0)
+    
+    plt.imshow(result)
     plt.show()
     ## End visualization steps ##
 '''
-
 '''
 image = mpimg.imread('test_images/test8.jpg')
 result = process_image(image)
@@ -499,15 +546,6 @@ plt.imshow(result)
 
 '''
 
-#Function taken from the First Project
-white_output = 'project_video_output.mp4'
-## To speed up the testing process you may want to try your pipeline on a shorter subclip of the video
-## To do so add .subclip(start_second,end_second) to the end of the line below
-## Where start_second and end_second are integer values representing the start and end of the subclip
-## You may also uncomment the following line for a subclip of the first 5 seconds
-#clip1 = VideoFileClip("project_video.mp4").subclip(36,48)
-clip1 = VideoFileClip("project_video.mp4")
-white_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
-%time white_clip.write_videofile(white_output, audio=False)
+
 
 
